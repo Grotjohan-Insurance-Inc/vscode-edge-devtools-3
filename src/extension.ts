@@ -85,7 +85,7 @@ export function activate(context: vscode.ExtensionContext): void {
         void launch(context);
     }));
 
-    context.subscriptions.push(vscode.commands.registerCommand(`${SETTINGS_STORE_NAME}.attachToCurrentDebugTarget`, (debugSessionId, config): void => {
+    context.subscriptions.push(vscode.commands.registerCommand(`${SETTINGS_STORE_NAME}.attachToCurrentDebugTarget`, (debugSessionId: string | undefined, config: Partial<IUserConfig>): void => {
         void attachToCurrentDebugTarget(context, debugSessionId, config);
     }));
 
@@ -133,7 +133,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     context.subscriptions.push(vscode.commands.registerCommand(
         `${SETTINGS_VIEW_NAME}.toggleScreencast`,
-        (target?: CDPTarget, isJsDebugProxiedCDPConnection = false) => {
+        (target?: CDPTarget, isJsDebugProxiedCDPConnection: boolean = false) => {
             if (!target){
                 const errorMessage = 'No target selected';
                 telemetryReporter.sendTelemetryErrorEvent('command/screencast/target', {message: errorMessage});
@@ -346,13 +346,23 @@ function startWebhint(context: vscode.ExtensionContext): void {
     void client.onReady().then(() => {
         // Listen for notification that the webhint install failed.
         const installFailedNotification: typeof installFailed = 'vscode-webhint/install-failed';
+        const disableInstallFailedNotification = vscode.workspace.getConfiguration(SETTINGS_STORE_NAME).get('webhintInstallNotification');
         client.onNotification(installFailedNotification, () => {
-            const message = 'Ensure `node` and `npm` are installed to enable automatically reporting issues in source files pertaining to accessibility, compatibility, security, and more.';
-            void vscode.window.showInformationMessage(message, 'OK', 'Disable').then(button => {
-                if (button === 'Disable') {
-                    void vscode.workspace.getConfiguration(SETTINGS_STORE_NAME).update('webhint', false, vscode.ConfigurationTarget.Global);
-                }
-            });
+            if (!telemetryReporter) {
+                telemetryReporter = createTelemetryReporter(context);
+            }
+            telemetryReporter.sendTelemetryEvent('user/webhint/install-failed');
+            if (!disableInstallFailedNotification) {
+                const message = 'Ensure `node` and `npm` are installed to enable automatically reporting issues in source files pertaining to accessibility, compatibility, security, and more.';
+                void vscode.window.showInformationMessage(message, 'Remind me Later', 'Don\'t show again', 'Disable Extension').then(button => {
+                    if (button === 'Disable Extension') {
+                        void vscode.workspace.getConfiguration(SETTINGS_STORE_NAME).update('webhint', false, vscode.ConfigurationTarget.Global);
+                    }
+                    if (button === 'Don\'t show again') {
+                        void vscode.workspace.getConfiguration(SETTINGS_STORE_NAME).update('webhintInstallNotification', true, vscode.ConfigurationTarget.Global);
+                    }
+                });
+            }
         });
         // Listen for requests to show the output panel for this extension.
         const showOutputNotification: typeof showOutput = 'vscode-webhint/show-output';
@@ -411,7 +421,7 @@ export async function attach(
                     void ErrorReporter.showErrorDialog({
                         errorCode: ErrorCodes.Error,
                         title: 'Error while getting a debug connection to the target',
-                        message: e,
+                        message: e instanceof Error && e.message ? e.message : `Unexpected error ${e}`,
                     });
 
                     matchedTargets = undefined;
@@ -471,8 +481,9 @@ export async function attach(
         void ErrorReporter.showErrorDialog({
             errorCode: ErrorCodes.Error,
             title: 'Error while fetching list of available targets',
-            message: exceptionStack || 'No available targets to attach.',
+            message: exceptionStack as string || 'No available targets to attach.',
         });
+
         telemetryReporter.sendTelemetryEvent('command/attach/error/no_json_array', telemetryProps);
     }
 }
